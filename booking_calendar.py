@@ -1,5 +1,5 @@
 from __future__ import print_function
-import datetime
+from datetime import datetime
 import time
 import json
 from os import name
@@ -14,7 +14,10 @@ from google.oauth2.credentials import Credentials
 SCOPES = ['https://www.googleapis.com/auth/calendar',
           'https://www.googleapis.com/auth/gmail.readonly']
 
-_month = {
+vattnas_email = 'noreply@citybreak.com'
+soderakra_email = 'noreply@dancenter.com'
+
+month = {
     'jan': '01',
     'feb': '02',
     'mar': '03',
@@ -46,7 +49,9 @@ _month = {
 }
 
 
-def get_booking_name(body):
+def get_booking_name(body, email):
+    if email == soderakra_email:
+        return "Okänd"
     split_line = []
     first_name = []
     last_name = []
@@ -63,34 +68,63 @@ def get_booking_name(body):
     return " ".join(name_list)
 
 
-def get_start_and_end_dates(body):
-    if 'Datum:' not in body:
-        return None, None
+def get_start_and_end_dates(body, email):
+    if email == vattnas_email:
+        if 'Datum:' not in body:
+            return None, None
 
-    for line in body.splitlines():
-        split_line = line.split()
-        if split_line and split_line[0] == 'Datum:':
-            start = f"{split_line[5]}-{_month[split_line[4]]}-{split_line[3]}"
-            end = f"{split_line[9]}-{_month[split_line[8]]}-{split_line[7]}"
-            return start, end
+        for line in body.splitlines():
+            split_line = line.split()
+            if split_line and split_line[0] == 'Datum:':
+                start = f"{split_line[5]}-{month[split_line[4]]}-{split_line[3]}"
+                end = f"{split_line[9]}-{month[split_line[8]]}-{split_line[7]}"
+                return start, end
+    elif email == soderakra_email:
+        if 'Period:' not in body:
+            return None, None
+        words = body.split()
+        for i, word in enumerate(words):
+            if word and word == 'Period:':
+                start_date_obj = datetime.strptime(
+                    words[i+1], '%d/%m-%Y').date()
+                end_date_obj = datetime.strptime(
+                    words[i+3], '%d/%m-%Y').date()
+                start = start_date_obj.strftime("%Y-%m-%d")
+                end = end_date_obj.strftime("%Y-%m-%d")
+                return start, end
+
     return None, None
 
 
-def get_booking_id(body):
-    split_line = []
-    for line in body.splitlines():
-        split_line = line.split()
-        if split_line and split_line[0] == 'Bokningsnummer:':
-            return split_line[1]
+def get_booking_id(body, email):
+    if email == vattnas_email:
+        split_line = []
+        for line in body.splitlines():
+            split_line = line.split()
+            if split_line and split_line[0] == 'Bokningsnummer:':
+                return split_line[1]
+    elif email == soderakra_email:
+        words = body.split()
+        for index, word in enumerate(words):
+            if word and (word == 'Reservationsnummer' or word == 'Bokning'):
+                return words[index+1]
     return "0"
 
 
-def get_booking_date(body):
-    split_line = []
-    for line in body.splitlines():
-        split_line = line.split()
-        if split_line and split_line[0] == 'Bokningsdatum:':
-            return f"20{split_line[1][5] + split_line[1][6]}-{_month[split_line[1][2] + split_line[1][3] + split_line[1][4]]}-{split_line[1][0] + split_line[1][1]}"
+def get_booking_date(body, email):
+    if email == vattnas_email:
+        split_line = []
+        for line in body.splitlines():
+            split_line = line.split()
+            if split_line and split_line[0] == 'Bokningsdatum:':
+                return f"20{split_line[1][5] + split_line[1][6]}-{month[split_line[1][2] + split_line[1][3] + split_line[1][4]]}-{split_line[1][0] + split_line[1][1]}"
+    elif email == soderakra_email:
+        words = body.split()
+        for i, word in enumerate(words):
+            if word == 'Bokningen' and words[i+1] == 'gjordes' and words[i+2] == 'den':
+                booking_date_obj = datetime.strptime(
+                    words[i+3], '%d/%m-%Y').date()
+                return booking_date_obj.strftime("%Y-%m-%d")
     return "0"
 
 
@@ -115,10 +149,14 @@ def setup_creds():
     return creds
 
 
-def scan_and_get_message_bodies(service_gmail):
+def scan_and_get_message_bodies(service_gmail, email):
+    if email == vattnas_email:
+        print("==== Vattnäs ====")
+    else:
+        print("==== Söderåkra ====")
     print("Fetching all messages matching the query...")
     results = service_gmail.users().messages().list(
-        userId='me', q='from:noreply@citybreak.com').execute()
+        userId='me', q=f'from:{email}').execute()
     messages = results.get('messages', [])
     message_bodies_new = []
     message_bodies_changed = []
@@ -132,27 +170,24 @@ def scan_and_get_message_bodies(service_gmail):
             msg = service_gmail.users().messages().get(
                 userId='me', id=message['id']).execute()
             for header in msg['payload']['headers']:
-                if (
-                    header['name'] == 'Subject'
-                    and ('NY BOKNING') in header['value']
-                ):
+                if header['name'] != 'Subject':
+                    continue
+                if 'NY BOKNING' in header['value']:
                     body = base64.urlsafe_b64decode(msg['payload'].get(
                         "body").get("data").encode("ASCII")).decode("utf-8")
                     message_bodies_new.append(body)
-                elif (
-                    header['name'] == 'Subject'
-                    and ('ÄNDRAD BOKNING') in header['value']
-                ):
+                elif 'Ny bokning av ditt hus' in header['value']:
+                    message_bodies_new.append(msg.get("snippet"))
+                elif 'ÄNDRAD BOKNING' in header['value']:
                     body = base64.urlsafe_b64decode(msg['payload'].get(
                         "body").get("data").encode("ASCII")).decode("utf-8")
                     message_bodies_changed.append(body)
-                elif (
-                    header['name'] == 'Subject'
-                    and ('AVBOKAD BOKNING') in header['value']
-                ):
+                elif 'AVBOKAD BOKNING' in header['value']:
                     body = base64.urlsafe_b64decode(msg['payload'].get(
                         "body").get("data").encode("ASCII")).decode("utf-8")
                     message_bodies_canceled.append(body)
+                elif 'Afbestilling af booking på dit hus' in header['value']:
+                    message_bodies_canceled.append(msg.get("snippet"))
 
     print(f"{len(message_bodies_new)} new bookings found.")
     print(f"{len(message_bodies_changed)} changed bookings found.")
@@ -160,20 +195,21 @@ def scan_and_get_message_bodies(service_gmail):
     return message_bodies_new, message_bodies_changed, message_bodies_canceled
 
 
-def add_or_change_events(message_bodies, events):
+def add_or_change_events(message_bodies, events, email):
     for body in message_bodies:
-        start_date, end_date = get_start_and_end_dates(body)
+        start_date, end_date = get_start_and_end_dates(body, email)
         desc = "".join(line + "\n" for line in body.splitlines())
-        summary = get_booking_name(body)
-        booking_id = get_booking_id(body)
-        booking_date = get_booking_date(body)
+        booking_name = get_booking_name(body, email)
+        booking_id = get_booking_id(body, email)
+        booking_date = get_booking_date(body, email)
+        place = 'SÖDERÅKRA' if email == soderakra_email else 'VATTNÄS'
 
         event = {
             'booking_id': booking_id,
             'booking_date': booking_date,
             'start': {'date': start_date},
             'end': {'date': end_date},
-            'summary': f"VATTNÄS: {summary}, {booking_id}",
+            'summary': f"{place}: {booking_name}, {booking_id}",
             'description': desc
         }
         if booking_id in events:
@@ -189,9 +225,9 @@ def add_or_change_events(message_bodies, events):
     return events
 
 
-def cancel_event(message_bodies_canceled, events):
+def cancel_event(message_bodies_canceled, events, email):
     for body in message_bodies_canceled:
-        booking_id = get_booking_id(body)
+        booking_id = get_booking_id(body, email)
         if events.pop(booking_id):
             print("d", end="")
         else:
@@ -200,36 +236,56 @@ def cancel_event(message_bodies_canceled, events):
     return events
 
 
-def update_db(message_bodies_new, message_bodies_changed, message_bodies_canceled):
+def update_db(message_bodies_new, message_bodies_changed, message_bodies_canceled, email):
     print("Opening json file...")
-    with open('events.json') as events_file:
-        if json_str := events_file.read():
-            events = json.loads(json_str)
-    print("Adding new events to json if not already in json...")
-    events = add_or_change_events(message_bodies_new, events)
-    print("Replacing events that were changed...")
-    events = add_or_change_events(message_bodies_changed, events)
-    print("Removing events that were canceled...")
-    events = cancel_event(message_bodies_canceled, events)
-    print("Updating json...")
-    with open('events.json', 'w') as events_file:
-        events_file.write(json.dumps(events))
-    print("Done")
+    events = {}
+    if email == vattnas_email:
+        with open('events_vattnas.json') as events_file:
+            if json_str := events_file.read():
+                events = json.loads(json_str)
+        print("Adding new events to json if not already in json...")
+        events = add_or_change_events(message_bodies_new, events, email)
+        print("Replacing events that were changed...")
+        events = add_or_change_events(message_bodies_changed, events, email)
+        print("Removing events that were canceled...")
+        events = cancel_event(message_bodies_canceled, events, email)
+        print("Updating json...")
+        with open('events_vattnas.json', 'w') as events_file:
+            events_file.write(json.dumps(events))
+        print("Done")
+    elif email == soderakra_email:
+        with open('events_soderakra.json') as events_file:
+            if json_str := events_file.read():
+                events = json.loads(json_str)
+        print("Adding new events to json if not already in json...")
+        events = add_or_change_events(message_bodies_new, events, email)
+        print("Replacing events that were changed...")
+        events = add_or_change_events(message_bodies_changed, events, email)
+        print("Removing events that were canceled...")
+        events = cancel_event(message_bodies_canceled, events, email)
+        print("Updating json...")
+        with open('events_soderakra.json', 'w') as events_file:
+            events_file.write(json.dumps(events))
+        print("Done")
+
     return events
 
 
-def get_booking_events(cal_events_all):
+def get_booking_events(cal_events_all, email):
     cal_events = {}
+    place = "VATTNÄS" if email == vattnas_email else "SÖDERÅKRA"
     for cal_event in cal_events_all['items']:
-        if "BOKNING" in cal_event['description'] and "VISIT DALARNA" in cal_event['description']:
-            cal_events[get_booking_id(cal_event['description'])] = cal_event
+        if place in cal_event['summary']:
+            cal_events[get_booking_id(
+                cal_event['description'], email)] = cal_event
+
     return cal_events
 
 
-def update_calendar(service, events):
+def update_calendar(service, events, email):
     print('Fetching all calendar events...')
     cal_events_all = service.events().list(calendarId='primary').execute()
-    cal_events = get_booking_events(cal_events_all)
+    cal_events = get_booking_events(cal_events_all, email)
     print(
         f"{len(cal_events_all['items'])} calendar events found. Looking for bookings...")
     print(f"{len(cal_events)} booking calendar events found.")
@@ -280,11 +336,15 @@ def main():
     service_cal = build('calendar', 'v3', credentials=creds)
     service_gmail = build('gmail', 'v1', credentials=creds)
 
-    message_bodies_new, message_bodies_changed, message_bodies_canceled = scan_and_get_message_bodies(
-        service_gmail)
-    events = update_db(message_bodies_new, message_bodies_changed,
-                       message_bodies_canceled)
-    update_calendar(service_cal, events)
+    emails = [vattnas_email, soderakra_email]
+
+    for email in emails:
+        message_bodies_new, message_bodies_changed, message_bodies_canceled = scan_and_get_message_bodies(
+            service_gmail, email)
+        events = update_db(message_bodies_new, message_bodies_changed,
+                           message_bodies_canceled, email)
+
+        update_calendar(service_cal, events, email)
 
 
 if __name__ == '__main__':
