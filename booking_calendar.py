@@ -228,7 +228,7 @@ def add_or_change_events(message_bodies, events, email):
 def cancel_event(message_bodies_canceled, events, email):
     for body in message_bodies_canceled:
         booking_id = get_booking_id(body, email)
-        if events.pop(booking_id):
+        if events.pop(booking_id, None):
             print("d", end="")
         else:
             print(".", end="")
