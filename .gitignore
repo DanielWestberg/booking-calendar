@@ -1,5 +1,2 @@
-credentials.json
-token.json
-events_vattnas.json
-events_soderakra.json
-vattnas-calendar-2bf48cafebf7.json
+*.json
+*.txt
