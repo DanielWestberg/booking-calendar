@@ -12,7 +12,8 @@ from google.oauth2.credentials import Credentials
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar',
-          'https://www.googleapis.com/auth/gmail.readonly']
+          'https://www.googleapis.com/auth/gmail.readonly',
+          'https://www.googleapis.com/auth/spreadsheets']
 
 vattnas_email = 'noreply@citybreak.com'
 soderakra_email = 'noreply@dancenter.com'
@@ -128,6 +129,16 @@ def get_booking_date(body, email):
     return "0"
 
 
+def get_booking_amount(body, email):
+    if email == vattnas_email:
+        split_line = []
+        for line in body.splitlines():
+            split_line = line.split()
+            if split_line and split_line[0] == 'Totalbelopp':
+                return split_line[3]
+    return "0"
+
+
 def setup_creds():
     # The file token.json stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
@@ -202,6 +213,7 @@ def add_or_change_events(message_bodies, events, email):
         booking_name = get_booking_name(body, email)
         booking_id = get_booking_id(body, email)
         booking_date = get_booking_date(body, email)
+        booking_amount = get_booking_amount(body, email)
         place = 'SÖDERÅKRA' if email == soderakra_email else 'VATTNÄS'
 
         event = {
@@ -209,6 +221,7 @@ def add_or_change_events(message_bodies, events, email):
             'booking_date': booking_date,
             'start': {'date': start_date},
             'end': {'date': end_date},
+            'amount': booking_amount,
             'summary': f"{place}: {booking_name}, {booking_id}",
             'description': desc
         }
@@ -330,11 +343,16 @@ def update_calendar(service, events, email):
     print('Done')
 
 
+def update_sheets(service, events, email):
+    return None
+
+
 def main():
     creds = setup_creds()
 
     service_cal = build('calendar', 'v3', credentials=creds)
     service_gmail = build('gmail', 'v1', credentials=creds)
+    service_sheets = build('sheets', 'v4', credentials=creds)
 
     emails = [vattnas_email, soderakra_email]
 
@@ -345,6 +363,7 @@ def main():
                            message_bodies_canceled, email)
 
         update_calendar(service_cal, events, email)
+        update_sheets(service_sheets, events, email)
 
 
 if __name__ == '__main__':
